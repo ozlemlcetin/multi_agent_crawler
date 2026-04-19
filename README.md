@@ -171,7 +171,7 @@ WAL journal mode is enabled. Foreign keys are enforced.
 - **No crawl politeness framework** — no `robots.txt` handling or per-host rate pacing is implemented.
 - **HTTP/HTTPS only** — `mailto:`, `ftp:`, `javascript:`, and other schemes are discarded.
 - **Single process** — `max_workers` in config is reserved for future parallel crawl workers; fetching is currently single-threaded.
-- **Web UI is local/dev only** — see `DEPLOYMENT.md` for an optional Vercel demo path and its limitations.
+- **Web UI is local/dev only** — intended for localhost use only.
 
 ---
 
@@ -196,11 +196,6 @@ concurrent search/status during `/api/run`. Run it directly with `python tests/t
 ```
 multi_agent_crawler/
 ├── pyproject.toml          package metadata and entry points
-├── requirements.txt        Vercel deployment dependency (flask)
-├── vercel.json             Vercel routing config (demo deployment only)
-├── api/
-│   └── index.py            Vercel entry point (see DEPLOYMENT.md)
-├── DEPLOYMENT.md           Deployment options and Vercel limitations
 └── src/
     └── crawler_search/
         ├── __init__.py
@@ -216,7 +211,7 @@ multi_agent_crawler/
         │   ├── pages.html
         │   ├── search.html
         │   └── status.html
-        ├── config.py        Config dataclass (respects CRAWLER_DB_PATH env var)
+        ├── config.py        Config dataclass
         ├── coordinator.py   orchestrates index / step / search / status / pause / resume / cancel
         ├── fetcher.py       synchronous HTTP fetch
         ├── frontier.py      bounded in-memory queue with backpressure
@@ -237,7 +232,6 @@ multi_agent_crawler/
 | `product_prd.md` | Product requirements and feature specification |
 | `multi_agent_workflow.md` | Description of the multi-agent development workflow |
 | `recommendation.md` | Design decisions, trade-offs, and future recommendations |
-| `DEPLOYMENT.md` | Local and Vercel deployment instructions and limitations |
 | `agents/` | Per-agent role definitions used during development |
 | `docs/diagrams.md` | Architecture and workflow diagrams (Mermaid) |
 

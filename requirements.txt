@@ -1,4 +1,0 @@
-# Runtime dependencies for Vercel deployment.
-# The core CLI has no third-party requirements.
-# The web UI requires Flask; pinned to the same range as pyproject.toml.
-flask>=3.0
