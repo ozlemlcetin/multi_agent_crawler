@@ -16,6 +16,8 @@ env/
 # Local database / runtime artifacts
 crawler.db
 *.db
+*.db-shm
+*.db-wal
 
 # Tooling / editor
 .vscode/

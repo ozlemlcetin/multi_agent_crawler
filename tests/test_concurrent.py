@@ -1,11 +1,17 @@
 """
-Concurrent acceptance test: proves search and status return while /api/run
-is still actively crawling.
+Integration demo: proves search and status return while /api/run is actively crawling.
 
-Usage:
-    python test_concurrent.py
+This is NOT a pytest unit test — it has no test_ functions and is not collected
+by pytest.  It is a standalone demo script that must be run directly:
 
-The server must NOT be running when this script starts — it launches its own.
+    python tests/test_concurrent.py
+
+Requirements:
+  - flask must be installed  (pip install -e ".[web]")
+  - No server already running on port 5001
+  - Active internet connection (crawls https://example.com)
+
+For automated CI, use tests/test_core.py instead (offline, deterministic).
 """
 
 from __future__ import annotations

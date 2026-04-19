@@ -164,7 +164,7 @@ CLI shell  →  Coordinator  →  Frontier (bounded queue)
 
 - The `Coordinator` is the single orchestration point. It owns the frontier and two SQLite connections: a write connection (`self.db`) used exclusively by `index()` and `step()`, and a read connection (`self._read_db`) used exclusively by `search()`, `status()`, and `jobs()`.
 - All writes to `self.db` are serialised by a `threading.Lock`. The lock is released during the network-I/O phase of `step()`, so read requests can execute freely while a fetch is in flight.
-- The frontier is an in-memory `queue.Queue`; it is not persisted across sessions.
+- The frontier is an in-memory `queue.Queue`. On startup, the Coordinator reloads pages with `fetch_state='queued'` belonging to active jobs back into the frontier, enabling session continuity without a separate persistence layer.
 - URL normalization (`url_normalizer`) is applied at every boundary: admission, parsing, and child discovery.
 
 ---
@@ -173,12 +173,13 @@ CLI shell  →  Coordinator  →  Frontier (bounded queue)
 
 | Table | Key columns | Purpose |
 |---|---|---|
-| `crawl_jobs` | `job_id`, `origin_url`, `max_depth`, `status`, `created_at` | One row per `index` call |
+| `crawl_jobs` | `job_id`, `origin_url`, `max_depth`, `status`, `created_at`, `started_at`, `finished_at`, `paused_at` | One row per `index` call |
 | `pages` | `page_id`, `canonical_url`, `fetch_state`, `http_status`, `title`, `content_hash`, `fetched_at` | One row per unique canonical URL |
 | `discoveries` | `(job_id, page_id)` PK, `depth`, `parent_page_id`, `discovered_at` | Provenance: which job found which page at what depth |
 | `page_links` | `(source_page_id, target_page_id)` PK | Outgoing link graph |
 | `terms` | `term_id`, `term` | Deduplicated vocabulary |
 | `postings` | `(term_id, page_id)` PK, `term_frequency` | Inverted index |
+| `job_events` | `event_id`, `job_id`, `event_type`, `url`, `detail`, `ts` | Per-job lifecycle event log |
 
 ---
 
@@ -215,7 +216,6 @@ call `search` between any two steps to see incrementally indexed results.
 The following are explicitly out of scope for MVP:
 
 - Multi-worker parallel crawling (concurrent fetches; current threading is request-handling only, not parallel indexing)
-- Frontier persistence and recovery across sessions
 - Recrawl of already-fetched pages
 - `robots.txt` compliance or per-host rate limiting
 - TF-IDF, BM25, PageRank, or semantic ranking
@@ -244,7 +244,9 @@ The following are explicitly out of scope for MVP:
 10. A negative or non-integer depth passed to `index` is rejected with a clear error message.
 11. `search` on a term with no indexed matches returns `(no results)` cleanly.
 12. WAL mode is active on the SQLite database.
-13. All six schema tables exist after first run.
+13. All seven schema tables exist after first run.
+14. `pause <job_id>` / `resume <job_id>` / `cancel <job_id>` correctly transition job status.
+15. Restarting the application reloads queued pages into the frontier.
 
 ---
 
