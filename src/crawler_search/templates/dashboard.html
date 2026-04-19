@@ -1,0 +1,197 @@
+{% extends "_base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div>
+      <h1>Dashboard</h1>
+      <p class="sub">System overview and quick actions</p>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <button class="btn btn-secondary btn-sm" onclick="loadAll()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<!-- stats row -->
+<div class="stat-row" id="stats-row">
+  <div class="stat-box s-blue"><div class="val" id="s-jobs">—</div><div class="lbl">total jobs</div></div>
+  <div class="stat-box s-running"><div class="val" id="s-active">—</div><div class="lbl">active jobs</div></div>
+  <div class="stat-box s-green"><div class="val" id="s-pages">—</div><div class="lbl">pages indexed</div></div>
+  <div class="stat-box s-orange"><div class="val" id="s-frontier">—</div><div class="lbl">frontier queue</div></div>
+  <div class="stat-box s-purple"><div class="val" id="s-disc">—</div><div class="lbl">discoveries</div></div>
+  <div class="stat-box s-gray" id="s-bp-box"><div class="val" id="s-bp">—</div><div class="lbl">backpressure</div></div>
+</div>
+
+<!-- active jobs + quick actions -->
+<div class="grid2">
+
+  <div class="card">
+    <div class="card-hdr">
+      <h2>Active Jobs</h2>
+      <a href="/jobs" class="btn btn-secondary btn-sm">All jobs →</a>
+    </div>
+    <div id="active-jobs-wrap">
+      <p class="empty-state">No active jobs.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr"><h2>Quick Actions</h2></div>
+
+    <div style="margin-bottom:.9rem">
+      <div class="field" style="margin-bottom:.5rem">
+        <label for="qa-url">Origin URL</label>
+        <input id="qa-url" type="url" placeholder="https://example.com" style="width:100%">
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label for="qa-depth">Depth</label>
+          <input id="qa-depth" type="number" min="0" max="10" value="1" style="width:70px">
+        </div>
+        <button class="btn btn-primary" onclick="doIndex()" style="margin-top:auto">Index</button>
+      </div>
+      <div class="alert" id="index-alert"></div>
+    </div>
+
+    <hr>
+
+    <div class="form-row" style="margin-top:.8rem">
+      <button class="btn btn-warn" onclick="doStep()">Step (1 page)</button>
+      <button class="btn btn-primary" onclick="doRun()">Run All</button>
+    </div>
+    <div class="alert" id="run-alert"></div>
+  </div>
+
+</div>
+
+<!-- status breakdown + recent events -->
+<div class="grid2">
+
+  <div class="card">
+    <div class="card-hdr">
+      <h2>Job Status Breakdown</h2>
+    </div>
+    <div id="status-breakdown"><p class="empty-state">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr">
+      <h2>Recent Events</h2>
+      <a href="/logs" class="btn btn-secondary btn-sm">All logs →</a>
+    </div>
+    <div id="recent-events-wrap">
+      <p class="empty-state">No events yet.</p>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadAll() {
+  const d = await api('/api/dashboard');
+  if (d.error) return;
+
+  // stats
+  document.getElementById('s-jobs').textContent    = d.jobs_total;
+  document.getElementById('s-active').textContent  = d.active_jobs.length;
+  document.getElementById('s-pages').textContent   = d.pages_total;
+  document.getElementById('s-disc').textContent    = d.discoveries_total;
+  document.getElementById('s-frontier').textContent = `${d.frontier_size} / ${d.frontier_capacity}`;
+  const bp = d.backpressure;
+  document.getElementById('s-bp').textContent = bp ? '⚠ YES' : 'no';
+  document.getElementById('s-bp-box').className = 'stat-box ' + (bp ? 's-red' : 's-gray');
+
+  // active jobs
+  const ajw = document.getElementById('active-jobs-wrap');
+  if (!d.active_jobs.length) {
+    ajw.innerHTML = '<p class="empty-state">No active jobs.</p>';
+  } else {
+    ajw.innerHTML = `<div class="tbl-wrap"><table>
+      <thead><tr><th>ID</th><th>Origin</th><th>Status</th><th>Depth</th></tr></thead>
+      <tbody>
+        ${d.active_jobs.map(j => `<tr>
+          <td>${jobLink(j.job_id)}</td>
+          <td class="url-cell" title="${j.origin_url}">${j.origin_url}</td>
+          <td>${tag(j.status)}</td>
+          <td>${j.max_depth}</td>
+        </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+
+  // status breakdown
+  const counts = d.status_counts;
+  const statuses = ['running','pending','paused','done','failed','cancelled'];
+  document.getElementById('status-breakdown').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem">
+      ${statuses.map(s => `
+        <div style="text-align:center;padding:.6rem;background:#f7f8fa;border-radius:6px">
+          <div style="font-size:1.3rem;font-weight:700;color:#212121">${counts[s]||0}</div>
+          <div>${tag(s)}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // recent events
+  const rew = document.getElementById('recent-events-wrap');
+  if (!d.recent_events.length) {
+    rew.innerHTML = '<p class="empty-state">No events yet.</p>';
+  } else {
+    rew.innerHTML = `<div class="tbl-wrap"><table>
+      <thead><tr><th>Time</th><th>Job</th><th>Event</th><th>URL</th></tr></thead>
+      <tbody>
+        ${d.recent_events.map(e => `<tr>
+          <td class="text-muted" style="white-space:nowrap;font-size:.78rem">${fmtRelative(e.ts)}</td>
+          <td>${jobLink(e.job_id)}</td>
+          <td>${tag(e.event_type)}</td>
+          <td class="url-cell" title="${e.url||''}">${e.url ? `<a href="${e.url}" target="_blank">${e.url}</a>` : '—'}</td>
+        </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+
+  setLastUpdated('lu');
+
+  // auto-refresh if active jobs exist
+  if (d.active_jobs.length > 0) setTimeout(loadAll, 5000);
+}
+
+async function doIndex() {
+  const url   = document.getElementById('qa-url').value.trim();
+  const depth = parseInt(document.getElementById('qa-depth').value, 10);
+  const res = await api('/api/index', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url, depth}),
+  });
+  if (res.error) showAlert('index-alert', 'Error: ' + res.error, 'err');
+  else { showAlert('index-alert', `Job ${res.job_id} created — ${res.origin_url}`, 'ok'); loadAll(); }
+}
+
+async function doStep() {
+  showAlert('run-alert', 'Processing…', 'info');
+  const res = await api('/api/step', {method:'POST'});
+  if (!res.processed) showAlert('run-alert', 'Frontier empty — nothing to process.', 'warn');
+  else if (res.skipped_paused) showAlert('run-alert', `Skipped paused job item: ${res.url}`, 'warn');
+  else showAlert('run-alert',
+    `[${res.outcome}] ${res.url} — ${res.links_found} links, ${res.children_admitted} children`, 'ok');
+  loadAll();
+}
+
+async function doRun() {
+  showAlert('run-alert', 'Running… (this may take a while)', 'info');
+  document.querySelector('[onclick="doRun()"]').disabled = true;
+  const res = await api('/api/run', {method:'POST'});
+  document.querySelector('[onclick="doRun()"]').disabled = false;
+  if (res.error) showAlert('run-alert', 'Error: ' + res.error, 'err');
+  else if (res.processed_count === 0) showAlert('run-alert', 'Frontier was empty.', 'warn');
+  else showAlert('run-alert',
+    `Done — ${res.processed_count} pages (html: ${res.html_success_count}, ` +
+    `failed: ${res.failed_count}, children: ${res.children_admitted_total})`, 'ok');
+  loadAll();
+}
+
+loadAll();
+</script>
+{% endblock %}

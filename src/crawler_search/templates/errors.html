@@ -1,0 +1,86 @@
+{% extends "_base.html" %}
+{% block title %}Errors{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div><h1>Errors &amp; Failures</h1><p class="sub">Pages that failed to fetch</p></div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <button class="btn btn-secondary btn-sm" onclick="loadErrors()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<div class="stat-row" id="error-stats"></div>
+
+<div class="card">
+  <div class="card-hdr">
+    <h2>Failed Pages <span id="err-count" class="text-muted" style="font-size:.8rem;font-weight:400"></span></h2>
+    <div class="actions">
+      <input id="f-job" type="search" placeholder="Filter by job ID…" oninput="renderErrors()" style="width:180px">
+    </div>
+  </div>
+  <div id="errors-wrap" class="tbl-wrap"><p class="empty-state">Loading…</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let errRows = [];
+
+function renderErrors() {
+  const q = (document.getElementById('f-job').value || '').toLowerCase();
+  let data = errRows;
+  if (q) data = data.filter(r => r.job_id.includes(q));
+  document.getElementById('err-count').textContent = `(${data.length})`;
+
+  const w = document.getElementById('errors-wrap');
+  if (!data.length) { w.innerHTML = '<p class="empty-state">No failed pages.</p>'; return; }
+
+  w.innerHTML = `<table>
+    <thead><tr>
+      <th>Failed At</th><th>URL</th><th>Job</th><th>Depth</th>
+      <th>HTTP</th><th>Error Detail</th><th>Action</th>
+    </tr></thead>
+    <tbody>
+      ${data.map(r => `<tr>
+        <td class="text-muted mono" style="white-space:nowrap;font-size:.78rem">${fmtTs(r.fetched_at || r.error_ts)}</td>
+        <td class="url-cell" title="${r.canonical_url}"><a href="${r.canonical_url}" target="_blank">${r.canonical_url}</a></td>
+        <td>${jobLink(r.job_id)}</td>
+        <td>${r.depth}</td>
+        <td>${r.http_status ? `<span class="tag tag-err">${r.http_status}</span>` : '—'}</td>
+        <td class="text-muted" style="font-size:.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${r.error_detail||''}">${r.error_detail || '—'}</td>
+        <td>
+          <button class="btn btn-secondary btn-xs" onclick="doRetry('${r.job_id}')" title="Create new job from same origin">Retry Job</button>
+        </td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadErrors() {
+  const data = await api('/api/errors?limit=500');
+  errRows = Array.isArray(data) ? data : [];
+
+  const total = errRows.length;
+  document.getElementById('error-stats').innerHTML = `
+    <div class="stat-box s-red"><div class="val">${total}</div><div class="lbl">failed pages</div></div>
+    <div class="stat-box s-orange"><div class="val">${errRows.filter(r=>r.http_status&&r.http_status>=400&&r.http_status<500).length}</div><div class="lbl">4xx errors</div></div>
+    <div class="stat-box s-red"><div class="val">${errRows.filter(r=>r.http_status&&r.http_status>=500).length}</div><div class="lbl">5xx errors</div></div>
+    <div class="stat-box s-gray"><div class="val">${errRows.filter(r=>!r.http_status).length}</div><div class="lbl">network errors</div></div>
+  `;
+
+  renderErrors();
+  setLastUpdated('lu');
+}
+
+async function doRetry(jobId) {
+  const r = await api(`/api/jobs/${jobId}/retry`, {method:'POST'});
+  if (r.error) alert('Error: ' + r.error);
+  else alert(`New job created: ${r.job_id} — ${r.origin_url}`);
+}
+
+loadErrors();
+</script>
+{% endblock %}

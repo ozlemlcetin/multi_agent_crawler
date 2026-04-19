@@ -1,0 +1,118 @@
+{% extends "_base.html" %}
+{% block title %}Logs{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div><h1>Global Logs</h1><p class="sub">System-wide event log across all jobs</p></div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <label style="font-size:.82rem;color:#555;display:flex;align-items:center;gap:.35rem;cursor:pointer">
+        <input type="checkbox" id="auto-refresh" onchange="toggleAutoRefresh()"> Auto-refresh
+      </label>
+      <button class="btn btn-secondary btn-sm" onclick="loadLogs()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hdr"><h2>Filters</h2></div>
+  <div class="filter-row">
+    <div class="field">
+      <label>Job ID</label>
+      <input id="f-job" type="search" placeholder="e.g. abc123" oninput="loadLogs()">
+    </div>
+    <div class="field">
+      <label>Event type</label>
+      <select id="f-type" onchange="loadLogs()">
+        <option value="">All events</option>
+        <option>job_created</option><option>queued</option><option>fetching</option>
+        <option>fetched</option><option>failed</option><option>parsed</option>
+        <option>indexed</option><option>completed</option><option>paused</option>
+        <option>resumed</option><option>cancelled</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Search (URL / detail)</label>
+      <input id="f-q" type="search" placeholder="free text…" oninput="loadLogs()">
+    </div>
+    <div class="field">
+      <label>Limit</label>
+      <select id="f-limit" onchange="loadLogs()">
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Sort</label>
+      <select id="f-sort" onchange="renderRows()">
+        <option value="desc">Newest first</option>
+        <option value="asc">Oldest first</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hdr">
+    <h2>Events <span id="count-badge" class="text-muted" style="font-size:.8rem;font-weight:400"></span></h2>
+  </div>
+  <div id="logs-wrap" class="tbl-wrap"><p class="empty-state">Loading…</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let rows = [];
+let _timer = null;
+
+function toggleAutoRefresh() {
+  clearInterval(_timer);
+  if (document.getElementById('auto-refresh').checked) {
+    _timer = setInterval(loadLogs, 5000);
+  }
+}
+
+function renderRows() {
+  const sort = document.getElementById('f-sort').value;
+  const data = sort === 'asc' ? [...rows].reverse() : rows;
+  const w = document.getElementById('logs-wrap');
+  document.getElementById('count-badge').textContent = `(${rows.length} events)`;
+  if (!data.length) { w.innerHTML = '<p class="empty-state">No events found.</p>'; return; }
+  w.innerHTML = `<table>
+    <thead><tr>
+      <th style="width:160px">Time (UTC)</th><th>Job</th><th>Event</th>
+      <th>URL</th><th>Detail</th>
+    </tr></thead>
+    <tbody>
+      ${data.map(e => `<tr>
+        <td class="text-muted mono" style="white-space:nowrap;font-size:.78rem">${fmtTs(e.ts)}</td>
+        <td>${jobLink(e.job_id)}</td>
+        <td>${tag(e.event_type)}</td>
+        <td class="url-cell">${e.url ? `<a href="${e.url}" target="_blank">${e.url}</a>` : '—'}</td>
+        <td class="text-muted" style="font-size:.8rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${e.detail||''}">${e.detail || '—'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadLogs() {
+  const job   = document.getElementById('f-job').value.trim();
+  const type  = document.getElementById('f-type').value;
+  const q     = document.getElementById('f-q').value.trim();
+  const limit = document.getElementById('f-limit').value;
+  let url = `/api/logs?limit=${limit}`;
+  if (job)  url += `&job_id=${encodeURIComponent(job)}`;
+  if (type) url += `&event_type=${encodeURIComponent(type)}`;
+  if (q)    url += `&q=${encodeURIComponent(q)}`;
+  const data = await api(url);
+  rows = Array.isArray(data) ? data : [];
+  renderRows();
+  setLastUpdated('lu');
+}
+
+loadLogs();
+</script>
+{% endblock %}

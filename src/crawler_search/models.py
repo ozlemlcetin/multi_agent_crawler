@@ -1,13 +1,15 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 
 class JobStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     DONE = "done"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class FetchState(Enum):
@@ -23,7 +25,7 @@ class CrawlJob:
     origin_url: str
     max_depth: int
     status: JobStatus = JobStatus.PENDING
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -74,6 +76,7 @@ class StepResult:
     links_found: int = 0
     children_admitted: int = 0
     error: str | None = None
+    skipped_paused: bool = False
 
 
 @dataclass

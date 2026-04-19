@@ -1,0 +1,306 @@
+{% extends "_base.html" %}
+{% block title %}Job {{ job_id }}{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div>
+      <h1>Job <code>{{ job_id }}</code> <span id="status-badge"></span></h1>
+      <p class="sub" id="job-origin">Loading…</p>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <span class="last-updated" id="lu"></span>
+      <button class="btn btn-secondary btn-sm" onclick="loadAll()">↺ Refresh</button>
+      <a href="/jobs" class="btn btn-ghost btn-sm">← All Jobs</a>
+    </div>
+  </div>
+</div>
+
+<div class="alert" id="action-alert"></div>
+
+<!-- header info + actions -->
+<div class="card" id="job-info-card">
+  <div class="card-hdr"><h2>Job Info</h2><div class="actions" id="action-btns"></div></div>
+  <div id="info-grid" class="grid2">
+    <dl id="info-left" style="display:grid;grid-template-columns:120px 1fr;gap:.3rem .8rem;font-size:.86rem"></dl>
+    <dl id="info-right" style="display:grid;grid-template-columns:110px 1fr;gap:.3rem .8rem;font-size:.86rem"></dl>
+  </div>
+</div>
+
+<!-- progress -->
+<div class="card">
+  <div class="card-hdr"><h2>Progress</h2></div>
+  <div class="stat-row" id="prog-stats"></div>
+  <div id="prog-bar-wrap" style="display:none;margin-top:.5rem">
+    <div id="prog-bar"></div>
+    <div style="display:flex;justify-content:space-between;font-size:.78rem;color:#888;margin-top:.4rem">
+      <span id="prog-rate"></span>
+      <span id="prog-elapsed"></span>
+    </div>
+  </div>
+</div>
+
+<!-- tabs -->
+<div class="card" style="padding-top:.75rem">
+  <div data-tabgroup="main">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="events"    onclick="switchTab('main','events')">Event Log</button>
+      <button class="tab-btn"        data-tab="pages"     onclick="switchTab('main','pages'); loadJobPages()">Discovered Pages</button>
+      <button class="tab-btn"        data-tab="failures"  onclick="switchTab('main','failures'); loadFailures()">Failures</button>
+    </div>
+
+    <!-- Events tab -->
+    <div class="tab-panel active" data-tab="events">
+      <div class="filter-row">
+        <div class="field">
+          <label>Event type</label>
+          <select id="ev-type" onchange="loadEvents()">
+            <option value="">All</option>
+            <option>job_created</option><option>queued</option><option>fetching</option>
+            <option>fetched</option><option>failed</option><option>completed</option>
+            <option>paused</option><option>resumed</option><option>cancelled</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Search</label>
+          <input id="ev-q" type="search" placeholder="URL or detail…" oninput="loadEvents()" style="width:200px">
+        </div>
+        <div class="field">
+          <label>Limit</label>
+          <select id="ev-limit" onchange="loadEvents()">
+            <option value="50">50</option><option value="100">100</option>
+            <option value="200" selected>200</option><option value="500">500</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Sort</label>
+          <select id="ev-sort" onchange="renderEvents()">
+            <option value="desc">Newest first</option>
+            <option value="asc">Oldest first</option>
+          </select>
+        </div>
+      </div>
+      <div id="events-wrap" class="tbl-wrap"></div>
+    </div>
+
+    <!-- Pages tab -->
+    <div class="tab-panel" data-tab="pages">
+      <div class="filter-row">
+        <div class="field">
+          <label>Fetch state</label>
+          <select id="pg-state" onchange="loadJobPages()">
+            <option value="">All</option>
+            <option>fetched</option><option>queued</option>
+            <option>unfetched</option><option>failed</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Search URL</label>
+          <input id="pg-q" type="search" placeholder="filter…" oninput="renderJobPages()" style="width:200px">
+        </div>
+        <div class="field">
+          <label>Limit</label>
+          <select id="pg-limit" onchange="loadJobPages()">
+            <option value="100">100</option><option value="200" selected>200</option><option value="500">500</option>
+          </select>
+        </div>
+      </div>
+      <div id="pages-wrap" class="tbl-wrap"></div>
+    </div>
+
+    <!-- Failures tab -->
+    <div class="tab-panel" data-tab="failures">
+      <div id="failures-wrap" class="tbl-wrap"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const JOB_ID = {{ job_id | tojson }};
+let _evRows = [];
+let _pgRows = [];
+let _autoTimer = null;
+
+/* ── Job info + progress ─────────────────────────────── */
+async function loadAll() {
+  const job = await api(`/api/jobs/${JOB_ID}`);
+  if (job.error) {
+    document.getElementById('job-origin').textContent = 'Job not found: ' + JOB_ID;
+    return;
+  }
+
+  document.getElementById('status-badge').innerHTML = tag(job.status);
+  document.getElementById('job-origin').innerHTML =
+    `<a href="${job.origin_url}" target="_blank" class="link">${job.origin_url}</a>`;
+
+  const left = document.getElementById('info-left');
+  const right = document.getElementById('info-right');
+  left.innerHTML = `
+    <dt class="text-muted">Job ID</dt>       <dd><code>${job.job_id}</code></dd>
+    <dt class="text-muted">Status</dt>       <dd>${tag(job.status)}</dd>
+    <dt class="text-muted">Max Depth</dt>    <dd>${job.max_depth}</dd>
+    <dt class="text-muted">Created</dt>      <dd style="font-size:.82rem">${fmtTs(job.created_at)}</dd>`;
+  right.innerHTML = `
+    <dt class="text-muted">Started</dt>      <dd style="font-size:.82rem">${fmtTs(job.started_at)}</dd>
+    <dt class="text-muted">Finished</dt>     <dd style="font-size:.82rem">${fmtTs(job.finished_at)}</dd>
+    <dt class="text-muted">Paused At</dt>    <dd style="font-size:.82rem">${fmtTs(job.paused_at)}</dd>`;
+
+  // action buttons
+  const btns = [];
+  if (job.status === 'running' || job.status === 'pending')
+    btns.push(`<button class="btn btn-warn btn-sm" onclick="doAction('pause')">Pause</button>`);
+  if (job.status === 'paused')
+    btns.push(`<button class="btn btn-success btn-sm" onclick="doAction('resume')">Resume</button>`);
+  if (['done','failed','cancelled'].includes(job.status))
+    btns.push(`<button class="btn btn-secondary btn-sm" onclick="doAction('retry')">Retry</button>`);
+  if (['pending','running','paused'].includes(job.status))
+    btns.push(`<button class="btn btn-danger btn-sm" onclick="doAction('cancel')">Cancel</button>`);
+  document.getElementById('action-btns').innerHTML = btns.join('');
+
+  // progress
+  const tot = job.discovered || 0;
+  const pct = tot > 0 ? Math.round(job.fetched / tot * 100) : 0;
+  document.getElementById('prog-stats').innerHTML = `
+    <div class="stat-box s-blue"><div class="val">${tot}</div><div class="lbl">discovered</div></div>
+    <div class="stat-box s-green"><div class="val">${job.fetched}</div><div class="lbl">fetched</div></div>
+    <div class="stat-box s-orange"><div class="val">${job.queued}</div><div class="lbl">queued</div></div>
+    <div class="stat-box s-gray"><div class="val">${job.unfetched}</div><div class="lbl">unfetched</div></div>
+    <div class="stat-box s-red"><div class="val">${job.failed}</div><div class="lbl">failed</div></div>
+    <div class="stat-box"><div class="val">${pct}%</div><div class="lbl">complete</div></div>
+  `;
+
+  if (tot > 0) {
+    document.getElementById('prog-bar-wrap').style.display = 'block';
+    document.getElementById('prog-bar').innerHTML = progressBar(pct);
+    const sr = tot > 0 ? ((job.fetched / Math.max(1, job.fetched + job.failed)) * 100).toFixed(0) : 0;
+    document.getElementById('prog-rate').textContent = `Success rate: ${sr}%  ·  Failed: ${job.failed}`;
+    const elapsed = job.started_at
+      ? formatElapsed(job.started_at, job.finished_at)
+      : '—';
+    document.getElementById('prog-elapsed').textContent = `Elapsed: ${elapsed}`;
+  }
+
+  setLastUpdated('lu');
+
+  // auto-refresh active jobs
+  clearTimeout(_autoTimer);
+  if (['running','pending'].includes(job.status)) {
+    _autoTimer = setTimeout(() => { loadAll(); loadEvents(); }, 4000);
+  }
+}
+
+function formatElapsed(start, end) {
+  const ms = new Date(end || new Date()) - new Date(start);
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
+/* ── Actions ─────────────────────────────────────────── */
+async function doAction(action) {
+  if (action === 'cancel' && !confirm(`Cancel job ${JOB_ID}?`)) return;
+  const path = action === 'retry'
+    ? `/api/jobs/${JOB_ID}/retry`
+    : `/api/jobs/${JOB_ID}/${action}`;
+  const r = await api(path, {method:'POST'});
+  if (r.error) showAlert('action-alert', 'Error: ' + r.error, 'err');
+  else {
+    const msg = action === 'retry' ? `New job created: ${r.job_id}` : `Job ${action}d.`;
+    showAlert('action-alert', msg, 'ok');
+    if (action === 'retry') {
+      setTimeout(() => { window.location.href = `/jobs/${r.job_id}`; }, 1200);
+    } else {
+      loadAll();
+    }
+  }
+}
+
+/* ── Events tab ──────────────────────────────────────── */
+let _eventsRaw = [];
+
+function renderEvents() {
+  const sort = document.getElementById('ev-sort').value;
+  const data = sort === 'asc' ? [..._eventsRaw].reverse() : _eventsRaw;
+  const w = document.getElementById('events-wrap');
+  if (!data.length) { w.innerHTML = '<p class="empty-state">No events.</p>'; return; }
+  w.innerHTML = `<table>
+    <thead><tr><th>Time (UTC)</th><th>Event</th><th>URL</th><th>Detail</th></tr></thead>
+    <tbody>
+      ${data.map(e => `<tr>
+        <td class="text-muted mono" style="white-space:nowrap;font-size:.78rem">${fmtTs(e.ts)}</td>
+        <td>${tag(e.event_type)}</td>
+        <td class="url-cell">${e.url ? `<a href="${e.url}" target="_blank">${e.url}</a>` : '—'}</td>
+        <td class="text-muted" style="font-size:.8rem;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="${e.detail||''}">${e.detail || '—'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadEvents() {
+  const type  = document.getElementById('ev-type').value;
+  const limit = document.getElementById('ev-limit').value;
+  let url = `/api/jobs/${JOB_ID}/events?limit=${limit}`;
+  if (type) url += `&event_type=${encodeURIComponent(type)}`;
+  const data = await api(url);
+  _eventsRaw = Array.isArray(data) ? data : [];
+  renderEvents();
+}
+
+/* ── Pages tab ───────────────────────────────────────── */
+let _pagesRaw = [];
+
+function renderJobPages() {
+  const q = (document.getElementById('pg-q').value || '').toLowerCase();
+  let data = q ? _pagesRaw.filter(r => r.canonical_url.toLowerCase().includes(q)) : _pagesRaw;
+  const w = document.getElementById('pages-wrap');
+  if (!data.length) { w.innerHTML = '<p class="empty-state">No pages.</p>'; return; }
+  w.innerHTML = `<table>
+    <thead><tr><th>URL</th><th>State</th><th>HTTP</th><th>Depth</th><th>Parent</th><th>Discovered</th></tr></thead>
+    <tbody>
+      ${data.map(r => `<tr>
+        <td class="url-cell" title="${r.canonical_url}"><a href="${r.canonical_url}" target="_blank">${r.canonical_url}</a></td>
+        <td>${tag(r.fetch_state)}</td>
+        <td>${r.http_status||'—'}</td>
+        <td>${r.depth}</td>
+        <td class="url-cell text-muted" style="font-size:.8rem">${r.parent_url||'—'}</td>
+        <td class="text-muted" style="font-size:.78rem;white-space:nowrap">${fmtRelative(r.discovered_at)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadJobPages() {
+  const state = document.getElementById('pg-state').value;
+  const limit = document.getElementById('pg-limit').value;
+  let url = `/api/jobs/${JOB_ID}/pages?limit=${limit}`;
+  if (state) url += `&fetch_state=${encodeURIComponent(state)}`;
+  const data = await api(url);
+  _pagesRaw = Array.isArray(data) ? data : [];
+  renderJobPages();
+}
+
+/* ── Failures tab ────────────────────────────────────── */
+async function loadFailures() {
+  const data = await api(`/api/jobs/${JOB_ID}/pages?fetch_state=failed&limit=500`);
+  const rows = Array.isArray(data) ? data : [];
+  const w = document.getElementById('failures-wrap');
+  if (!rows.length) { w.innerHTML = '<p class="empty-state">No failures for this job.</p>'; return; }
+  w.innerHTML = `<table>
+    <thead><tr><th>URL</th><th>HTTP</th><th>Depth</th><th>Fetched At</th></tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr>
+        <td class="url-cell" title="${r.canonical_url}"><a href="${r.canonical_url}" target="_blank">${r.canonical_url}</a></td>
+        <td>${r.http_status ? `<span class="tag tag-err">${r.http_status}</span>` : '—'}</td>
+        <td>${r.depth}</td>
+        <td class="text-muted" style="font-size:.78rem;white-space:nowrap">${fmtTs(r.fetched_at)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+/* ── init ────────────────────────────────────────────── */
+loadAll();
+loadEvents();
+</script>
+{% endblock %}

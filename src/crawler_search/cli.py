@@ -23,6 +23,10 @@ def _print_help() -> None:
     print()
     print("    index <url> <depth>    Queue <url> as a new crawl job up to <depth> hops")
     print("    step                   Fetch + index one queued page (synchronous)")
+    print("    run                    Process all queued pages until frontier is empty")
+    print("    pause <job_id>         Pause a pending or running job")
+    print("    resume <job_id>        Resume a paused job")
+    print("    cancel <job_id>        Cancel a pending, running, or paused job")
     print("    jobs                   List all crawl jobs")
     print("    status                 Show counts and frontier state")
     print("    search <query>         Search indexed pages  (space-separated terms OR'd)")
@@ -83,11 +87,25 @@ def run_shell(coordinator: Coordinator) -> None:
                 continue
             print(f"  job created  id={job.job_id}  depth={job.max_depth}  url={job.origin_url}")
 
+        # ── run ───────────────────────────────────────────────────────────
+        elif cmd == "run":
+            summary = coordinator.run_until_idle()
+            if summary["processed_count"] == 0:
+                print("  frontier is empty — nothing to process")
+            else:
+                print(f"  {'processed':<24}  {summary['processed_count']}")
+                print(f"  {'html success':<24}  {summary['html_success_count']}")
+                print(f"  {'non-html':<24}  {summary['non_html_count']}")
+                print(f"  {'failed':<24}  {summary['failed_count']}")
+                print(f"  {'children admitted':<24}  {summary['children_admitted_total']}")
+
         # ── step ──────────────────────────────────────────────────────────
         elif cmd == "step":
             r = coordinator.step()
             if not r.processed:
                 print("  frontier is empty — nothing to process")
+            elif r.skipped_paused:
+                print(f"  [skipped — paused job]  {r.url}")
             else:
                 outcome_tag = f"[{r.outcome}]"
                 print(f"  {outcome_tag:<20}  {r.url}")
@@ -162,7 +180,40 @@ def run_shell(coordinator: Coordinator) -> None:
                         (j["origin_url"], 0),
                     ]))
 
-        # ── unknown ───────────────────────────────��───────────────────────
+        # ── pause ─────────────────────────────────────────────────────────
+        elif cmd == "pause":
+            if len(args) != 1:
+                print("  usage: pause <job_id>")
+                continue
+            ok = coordinator.pause(args[0])
+            if ok:
+                print(f"  job {args[0]} paused")
+            else:
+                print(f"  error: job {args[0]!r} not found or not pausable")
+
+        # ── resume ────────────────────────────────────────────────────────
+        elif cmd == "resume":
+            if len(args) != 1:
+                print("  usage: resume <job_id>")
+                continue
+            ok = coordinator.resume(args[0])
+            if ok:
+                print(f"  job {args[0]} resumed")
+            else:
+                print(f"  error: job {args[0]!r} not found or not paused")
+
+        # ── cancel ────────────────────────────────────────────────────────
+        elif cmd == "cancel":
+            if len(args) != 1:
+                print("  usage: cancel <job_id>")
+                continue
+            ok = coordinator.cancel(args[0])
+            if ok:
+                print(f"  job {args[0]} cancelled")
+            else:
+                print(f"  error: job {args[0]!r} not found or already finished")
+
+        # ── unknown ───────────────────────────────────────────────────────
         else:
             print(f"  unknown command: {cmd!r}   (type  help  to see available commands)")
 

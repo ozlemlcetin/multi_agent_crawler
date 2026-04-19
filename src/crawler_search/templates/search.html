@@ -1,0 +1,91 @@
+{% extends "_base.html" %}
+{% block title %}Search{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div><h1>Search</h1><p class="sub">Full-text search across all indexed pages</p></div>
+</div>
+
+<div class="card">
+  <div class="form-row" style="align-items:flex-end">
+    <div class="field" style="flex:1">
+      <label for="q">Search query</label>
+      <input id="q" type="search" placeholder="Enter terms — OR-matched across all indexed pages…"
+             style="width:100%;font-size:1rem;padding:.55rem .9rem"
+             onkeydown="if(event.key==='Enter')doSearch()">
+    </div>
+    <div class="field">
+      <label for="limit">Limit</label>
+      <select id="limit">
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" onclick="doSearch()" style="padding:.55rem 1.4rem;font-size:.95rem">Search</button>
+  </div>
+</div>
+
+<div id="results-area"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function doSearch() {
+  const q     = document.getElementById('q').value.trim();
+  const limit = document.getElementById('limit').value;
+  const area  = document.getElementById('results-area');
+  if (!q) { area.innerHTML = ''; return; }
+
+  area.innerHTML = '<div class="card"><p class="empty-state">Searching…</p></div>';
+  const res = await api(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+
+  if (!Array.isArray(res) || res.length === 0) {
+    area.innerHTML = `<div class="card"><p class="empty-state">No results for <strong>${q}</strong>.</p></div>`;
+    return;
+  }
+
+  // group by origin_url for optional insight
+  const byOrigin = {};
+  res.forEach(r => {
+    if (!byOrigin[r.origin_url]) byOrigin[r.origin_url] = [];
+    byOrigin[r.origin_url].push(r);
+  });
+
+  area.innerHTML = `
+    <div class="card">
+      <div class="card-hdr">
+        <h2>${res.length} result${res.length !== 1 ? 's' : ''} for <em>"${q}"</em></h2>
+        <span class="text-muted" style="font-size:.8rem">${Object.keys(byOrigin).length} origin(s)</span>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Relevant URL</th><th>Origin URL</th><th>Depth</th></tr></thead>
+          <tbody>
+            ${res.map((r, i) => `<tr>
+              <td class="text-muted" style="width:32px">${i+1}</td>
+              <td class="url-cell" title="${r.relevant_url}"><a href="${r.relevant_url}" target="_blank">${r.relevant_url}</a></td>
+              <td class="url-cell" title="${r.origin_url}"><a href="${r.origin_url}" target="_blank">${r.origin_url}</a></td>
+              <td>${r.depth}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr"><h2>Results by Origin</h2></div>
+      <div style="display:grid;gap:.5rem">
+        ${Object.entries(byOrigin).map(([origin, hits]) => `
+          <div style="display:flex;align-items:baseline;gap:.75rem;padding:.4rem .2rem;border-bottom:1px solid #f0f0f0">
+            <span class="tag tag-info">${hits.length}</span>
+            <div class="url-cell" style="flex:1" title="${origin}">
+              <a href="${origin}" target="_blank">${origin}</a>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+</script>
+{% endblock %}

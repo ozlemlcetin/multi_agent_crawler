@@ -1,0 +1,123 @@
+{% extends "_base.html" %}
+{% block title %}Status{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div><h1>System Status</h1><p class="sub">Frontier, database, and operational metrics</p></div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <label style="font-size:.82rem;color:#555;display:flex;align-items:center;gap:.35rem;cursor:pointer">
+        <input type="checkbox" id="auto-refresh" onchange="toggleAR()"> Auto-refresh
+      </label>
+      <button class="btn btn-secondary btn-sm" onclick="loadStatus()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<div class="grid2">
+
+  <div class="card">
+    <div class="card-hdr"><h2>Frontier Queue</h2></div>
+    <div class="stat-row" id="frontier-stats" style="margin-bottom:0"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr"><h2>Database Counts</h2></div>
+    <div class="stat-row" id="db-stats" style="margin-bottom:0"></div>
+  </div>
+
+</div>
+
+<div class="card">
+  <div class="card-hdr"><h2>Crawl Controls</h2></div>
+  <div class="form-row" style="margin-bottom:.7rem">
+    <div class="field" style="flex:3">
+      <label for="ctrl-url">Origin URL</label>
+      <input id="ctrl-url" type="url" placeholder="https://example.com">
+    </div>
+    <div class="field">
+      <label for="ctrl-depth">Depth</label>
+      <input id="ctrl-depth" type="number" min="0" max="10" value="1" style="width:70px">
+    </div>
+    <button class="btn btn-primary" onclick="doIndex()" style="margin-top:auto">Index</button>
+  </div>
+  <div class="form-row">
+    <button class="btn btn-warn" onclick="doStep()">Step (1 page)</button>
+    <button class="btn btn-primary" id="run-btn" onclick="doRun()">Run All</button>
+  </div>
+  <div class="alert" id="ctrl-alert"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _timer = null;
+function toggleAR() {
+  clearInterval(_timer);
+  if (document.getElementById('auto-refresh').checked) _timer = setInterval(loadStatus, 5000);
+}
+
+async function loadStatus() {
+  const s = await api('/api/status');
+  if (s.error) return;
+
+  const bp = s.backpressure;
+  document.getElementById('frontier-stats').innerHTML = `
+    <div class="stat-box ${bp?'s-red':'s-blue'}">
+      <div class="val">${s.frontier_size}</div><div class="lbl">queue size</div>
+    </div>
+    <div class="stat-box s-gray">
+      <div class="val">${s.frontier_capacity}</div><div class="lbl">capacity</div>
+    </div>
+    <div class="stat-box ${bp?'s-red':'s-green'}">
+      <div class="val">${bp?'⚠ YES':'OK'}</div><div class="lbl">backpressure</div>
+    </div>`;
+
+  document.getElementById('db-stats').innerHTML = [
+    ['crawl jobs',  s.crawl_jobs_total,   's-blue'],
+    ['pages',       s.pages_total,        's-green'],
+    ['discoveries', s.discoveries_total,  's-purple'],
+    ['page links',  s.page_links_total,   's-gray'],
+    ['terms',       s.terms_total,        's-orange'],
+    ['postings',    s.postings_total,     's-gray'],
+  ].map(([lbl,val,cls]) => `
+    <div class="stat-box ${cls}">
+      <div class="val">${val}</div><div class="lbl">${lbl}</div>
+    </div>`).join('');
+
+  setLastUpdated('lu');
+}
+
+async function doIndex() {
+  const url   = document.getElementById('ctrl-url').value.trim();
+  const depth = parseInt(document.getElementById('ctrl-depth').value, 10);
+  const r = await api('/api/index', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url, depth}),
+  });
+  if (r.error) showAlert('ctrl-alert', 'Error: ' + r.error, 'err');
+  else { showAlert('ctrl-alert', `Job ${r.job_id} created.`, 'ok'); loadStatus(); }
+}
+
+async function doStep() {
+  const r = await api('/api/step', {method:'POST'});
+  if (!r.processed) showAlert('ctrl-alert', 'Frontier empty.', 'warn');
+  else showAlert('ctrl-alert', `[${r.outcome}] ${r.url} — ${r.children_admitted} children admitted`, 'ok');
+  loadStatus();
+}
+
+async function doRun() {
+  document.getElementById('run-btn').disabled = true;
+  showAlert('ctrl-alert', 'Running…', 'info');
+  const r = await api('/api/run', {method:'POST'});
+  document.getElementById('run-btn').disabled = false;
+  if (r.error) showAlert('ctrl-alert', 'Error: ' + r.error, 'err');
+  else if (r.processed_count === 0) showAlert('ctrl-alert', 'Frontier was empty.', 'warn');
+  else showAlert('ctrl-alert', `Done — ${r.processed_count} pages processed.`, 'ok');
+  loadStatus();
+}
+
+loadStatus();
+</script>
+{% endblock %}

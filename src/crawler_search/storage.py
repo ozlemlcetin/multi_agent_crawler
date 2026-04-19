@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS crawl_jobs (
     status      TEXT NOT NULL DEFAULT 'pending',
     created_at  TEXT NOT NULL,
     started_at  TEXT,
-    finished_at TEXT
+    finished_at TEXT,
+    paused_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pages (
@@ -62,8 +63,24 @@ CREATE TABLE IF NOT EXISTS postings (
 );
 """
 
+_DDL_EXTRA = """
+CREATE TABLE IF NOT EXISTS job_events (
+    event_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     TEXT NOT NULL REFERENCES crawl_jobs(job_id),
+    event_type TEXT NOT NULL,
+    url        TEXT,
+    detail     TEXT,
+    ts         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
+"""
+
+_MIGRATIONS = [
+    "ALTER TABLE crawl_jobs ADD COLUMN paused_at TEXT",
+]
+
 _EXPECTED_TABLES = frozenset(
-    {"crawl_jobs", "pages", "discoveries", "page_links", "terms", "postings"}
+    {"crawl_jobs", "pages", "discoveries", "page_links", "terms", "postings", "job_events"}
 )
 
 # ---------------------------------------------------------------------------
@@ -71,11 +88,23 @@ _EXPECTED_TABLES = frozenset(
 # ---------------------------------------------------------------------------
 
 
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for sql in _MIGRATIONS:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
 def open_db(db_path: str | Path) -> sqlite3.Connection:
-    """Open (or create) the SQLite database, apply pragmas and DDL."""
+    """Open (or create) the SQLite database, apply pragmas, DDL, and migrations."""
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_DDL)
+    conn.commit()
+    _apply_migrations(conn)
+    conn.executescript(_DDL_EXTRA)
     conn.commit()
     return conn
 
@@ -138,6 +167,43 @@ def list_crawl_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def count_crawl_jobs(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM crawl_jobs").fetchone()[0]
+
+
+def count_unfinished_pages_for_job(conn: sqlite3.Connection, job_id: str) -> int:
+    """Count pages discovered for this job that are still unfetched or queued."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) FROM discoveries d
+        JOIN pages p ON p.page_id = d.page_id
+        WHERE d.job_id = ? AND p.fetch_state IN ('unfetched', 'queued')
+        """,
+        (job_id,),
+    ).fetchone()[0]
+
+
+def mark_job_running(conn: sqlite3.Connection, job_id: str, started_at: str) -> None:
+    """Transition job from pending → running. No-op if already running or done."""
+    conn.execute(
+        """
+        UPDATE crawl_jobs SET status = 'running', started_at = ?
+        WHERE job_id = ? AND status = 'pending'
+        """,
+        (started_at, job_id),
+    )
+    conn.commit()
+
+
+def set_job_status(
+    conn: sqlite3.Connection,
+    job_id: str,
+    status: str,
+    finished_at: str | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE crawl_jobs SET status = ?, finished_at = ? WHERE job_id = ?",
+        (status, finished_at, job_id),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +381,237 @@ def get_job_max_depth(conn: sqlite3.Connection, job_id: str) -> int | None:
         "SELECT max_depth FROM crawl_jobs WHERE job_id = ?", (job_id,)
     ).fetchone()
     return row["max_depth"] if row else None
+
+
+def get_crawl_job(conn: sqlite3.Connection, job_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM crawl_jobs WHERE job_id = ?", (job_id,)
+    ).fetchone()
+
+
+def set_job_paused(conn: sqlite3.Connection, job_id: str, paused_at: str) -> None:
+    conn.execute(
+        """
+        UPDATE crawl_jobs SET status = 'paused', paused_at = ?
+        WHERE job_id = ? AND status IN ('pending', 'running')
+        """,
+        (paused_at, job_id),
+    )
+    conn.commit()
+
+
+def set_job_resumed(conn: sqlite3.Connection, job_id: str, new_status: str) -> None:
+    conn.execute(
+        """
+        UPDATE crawl_jobs SET status = ?, paused_at = NULL
+        WHERE job_id = ? AND status = 'paused'
+        """,
+        (new_status, job_id),
+    )
+    conn.commit()
+
+
+def set_job_cancelled(conn: sqlite3.Connection, job_id: str, finished_at: str) -> None:
+    conn.execute(
+        """
+        UPDATE crawl_jobs SET status = 'cancelled', finished_at = ?
+        WHERE job_id = ? AND status IN ('pending', 'running', 'paused')
+        """,
+        (finished_at, job_id),
+    )
+    conn.commit()
+
+
+def get_queued_pages_for_job(
+    conn: sqlite3.Connection, job_id: str
+) -> list[sqlite3.Row]:
+    """Return all queued (fetch_state='queued') pages discovered by this job."""
+    return conn.execute(
+        """
+        SELECT p.page_id, p.canonical_url, d.depth, d.parent_page_id
+          FROM discoveries d
+          JOIN pages p ON p.page_id = d.page_id
+         WHERE d.job_id = ? AND p.fetch_state = 'queued'
+        """,
+        (job_id,),
+    ).fetchall()
+
+
+def get_queued_pages_for_active_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return queued pages for jobs that are pending or running (for frontier reload)."""
+    return conn.execute(
+        """
+        SELECT p.page_id, p.canonical_url, d.depth, d.parent_page_id, d.job_id
+          FROM discoveries d
+          JOIN pages p ON p.page_id = d.page_id
+          JOIN crawl_jobs j ON j.job_id = d.job_id
+         WHERE j.status IN ('pending', 'running')
+           AND p.fetch_state = 'queued'
+        """,
+    ).fetchall()
+
+
+def get_job_progress(conn: sqlite3.Connection, job_id: str) -> dict:
+    """Return counts for a single job: discovered, fetched, queued, unfetched, failed."""
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS discovered,
+            SUM(CASE WHEN p.fetch_state = 'fetched'   THEN 1 ELSE 0 END) AS fetched,
+            SUM(CASE WHEN p.fetch_state = 'queued'    THEN 1 ELSE 0 END) AS queued,
+            SUM(CASE WHEN p.fetch_state = 'unfetched' THEN 1 ELSE 0 END) AS unfetched,
+            SUM(CASE WHEN p.fetch_state = 'failed'    THEN 1 ELSE 0 END) AS failed
+          FROM discoveries d
+          JOIN pages p ON p.page_id = d.page_id
+         WHERE d.job_id = ?
+        """,
+        (job_id,),
+    ).fetchone()
+    return {
+        "discovered": row["discovered"] or 0,
+        "fetched":    row["fetched"]    or 0,
+        "queued":     row["queued"]     or 0,
+        "unfetched":  row["unfetched"]  or 0,
+        "failed":     row["failed"]     or 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# job_events helpers
+# ---------------------------------------------------------------------------
+
+
+def log_event(
+    conn: sqlite3.Connection,
+    job_id: str,
+    event_type: str,
+    *,
+    url: str | None = None,
+    detail: str | None = None,
+    ts: str | None = None,
+) -> None:
+    from datetime import datetime, timezone
+    if ts is None:
+        ts = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO job_events (job_id, event_type, url, detail, ts) VALUES (?, ?, ?, ?, ?)",
+        (job_id, event_type, url, detail, ts),
+    )
+    conn.commit()
+
+
+def get_job_events(
+    conn: sqlite3.Connection, job_id: str, limit: int = 200
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM job_events WHERE job_id = ? ORDER BY event_id DESC LIMIT ?",
+        (job_id, limit),
+    ).fetchall()
+
+
+def get_global_events(
+    conn: sqlite3.Connection,
+    limit: int = 200,
+    job_id: str | None = None,
+    event_type: str | None = None,
+    q: str | None = None,
+) -> list[sqlite3.Row]:
+    conditions: list[str] = []
+    params: list = []
+    if job_id:
+        conditions.append("e.job_id = ?")
+        params.append(job_id)
+    if event_type:
+        conditions.append("e.event_type = ?")
+        params.append(event_type)
+    if q:
+        conditions.append("(e.url LIKE ? OR e.detail LIKE ?)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT e.*, j.origin_url
+          FROM job_events e
+          JOIN crawl_jobs j ON j.job_id = e.job_id
+         {where}
+         ORDER BY e.event_id DESC LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def get_failed_pages(conn: sqlite3.Connection, limit: int = 200) -> list[sqlite3.Row]:
+    """Return pages with fetch_state='failed', joined to job info (one row per page)."""
+    return conn.execute(
+        """
+        SELECT p.canonical_url, p.http_status, p.content_type, p.fetched_at,
+               d.job_id, d.depth, j.origin_url,
+               e.detail AS error_detail, e.ts AS error_ts
+          FROM pages p
+          JOIN (
+              SELECT page_id, MIN(job_id) AS job_id, MIN(depth) AS depth
+                FROM discoveries GROUP BY page_id
+          ) d ON d.page_id = p.page_id
+          JOIN crawl_jobs j ON j.job_id = d.job_id
+          LEFT JOIN (
+              SELECT url, detail, ts, ROW_NUMBER() OVER (PARTITION BY url ORDER BY event_id DESC) AS rn
+                FROM job_events WHERE event_type = 'failed'
+          ) e ON e.url = p.canonical_url AND e.rn = 1
+         WHERE p.fetch_state = 'failed'
+         ORDER BY p.fetched_at DESC NULLS LAST
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def get_discovered_pages(
+    conn: sqlite3.Connection,
+    job_id: str | None = None,
+    fetch_state: str | None = None,
+    depth: int | None = None,
+    limit: int = 200,
+) -> list[sqlite3.Row]:
+    conditions: list[str] = []
+    params: list = []
+    if job_id:
+        conditions.append("d.job_id = ?")
+        params.append(job_id)
+    if fetch_state:
+        conditions.append("p.fetch_state = ?")
+        params.append(fetch_state)
+    if depth is not None:
+        conditions.append("d.depth = ?")
+        params.append(depth)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT p.canonical_url, p.fetch_state, p.title, p.http_status, p.fetched_at,
+               d.job_id, d.depth, d.discovered_at,
+               j.origin_url,
+               pp.canonical_url AS parent_url
+          FROM discoveries d
+          JOIN pages p   ON p.page_id  = d.page_id
+          JOIN crawl_jobs j ON j.job_id = d.job_id
+          LEFT JOIN pages pp ON pp.page_id = d.parent_page_id
+         {where}
+         ORDER BY d.discovered_at DESC
+         LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def get_active_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM crawl_jobs WHERE status IN ('pending','running','paused') ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def get_jobs_count_by_status(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS cnt FROM crawl_jobs GROUP BY status"
+    ).fetchall()
+    return {r["status"]: r["cnt"] for r in rows}

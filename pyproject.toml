@@ -8,8 +8,12 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+web = ["flask>=3.0"]
+
 [project.scripts]
 crawler-search = "crawler_search.cli:main"
+crawler-search-web = "crawler_search.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

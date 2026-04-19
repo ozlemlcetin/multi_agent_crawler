@@ -3,8 +3,8 @@
 ## Summary
 
 A local, single-process Python web crawler and keyword-based search system.
-Users submit crawl jobs via a CLI shell, step through page processing manually,
-and query indexed content from the same shell.
+Users submit crawl jobs via a CLI shell or a local web UI, process pages with `step`
+(one at a time) or `run` (full frontier drain), and query indexed content from either interface.
 All state is persisted in a local SQLite database.
 
 ---
@@ -50,24 +50,34 @@ that covers the full pipeline from URL submission to keyword search.
 
 ## User-Facing Interface Expectations
 
-The system exposes a single interactive CLI shell invoked as:
+The system exposes two interfaces:
 
+**CLI shell:**
 ```
 crawler-search run
 ```
 
-All interaction happens through shell commands. There is no web UI, no REST API,
-and no background daemon. The shell accepts:
+**Local web UI (optional, requires `flask`):**
+```
+PORT=5001 crawler-search-web
+```
+
+The CLI shell accepts:
 
 | Command | Purpose |
 |---|---|
 | `index <url> <depth>` | Submit a crawl job for `<url>` up to `<depth>` hops |
 | `step` | Process one queued page synchronously |
+| `run` | Drain the full frontier — process all queued pages until idle |
 | `search <query>` | Search indexed pages and print result rows |
 | `jobs` | List all submitted crawl jobs |
 | `status` | Show frontier state and database counts |
 | `help` | Print command reference |
 | `quit` | Exit the shell |
+
+The web UI exposes the same operations via a browser at `http://localhost:<PORT>`
+with a REST API (`POST /api/index`, `POST /api/step`, `POST /api/run`,
+`GET /api/search`, `GET /api/jobs`, `GET /api/status`).
 
 ---
 
@@ -134,8 +144,8 @@ and no background daemon. The shell accepts:
 - **Dependencies:** Python stdlib only. No third-party packages.
 - **Database:** SQLite with WAL journal mode and foreign key enforcement.
 - **Persistence:** Local file `crawler.db` in the working directory.
-- **Concurrency:** Single process, no worker threads in MVP.
-- **Interface:** CLI shell only. No web UI, no REST API.
+- **Concurrency:** Single process. The CLI is fully synchronous. The web server runs with `threaded=True` (Flask thread-per-request) so read endpoints (search, status, jobs) are served concurrently with an active `/api/run`. Indexing itself remains single-threaded — one page is fetched at a time.
+- **Interface:** CLI shell (stdlib-only). Optional local web UI via Flask (`pip install -e ".[web]"`).
 - **Networking:** `urllib` only. HTTP and HTTPS schemes only.
 - **Platform:** localhost. No distributed components.
 
@@ -152,12 +162,10 @@ CLI shell  →  Coordinator  →  Frontier (bounded queue)
                           →  SQLite DB (storage + WAL)
 ```
 
-- The `Coordinator` is the single orchestration point. It owns the DB connection and frontier.
+- The `Coordinator` is the single orchestration point. It owns the frontier and two SQLite connections: a write connection (`self.db`) used exclusively by `index()` and `step()`, and a read connection (`self._read_db`) used exclusively by `search()`, `status()`, and `jobs()`.
+- All writes to `self.db` are serialised by a `threading.Lock`. The lock is released during the network-I/O phase of `step()`, so read requests can execute freely while a fetch is in flight.
 - The frontier is an in-memory `queue.Queue`; it is not persisted across sessions.
-- The write path (`index_writer`) is designed to sit behind a single writer thread in a
-  future patch without structural changes.
-- URL normalization (`url_normalizer`) is applied at every boundary: admission, parsing,
-  and child discovery.
+- URL normalization (`url_normalizer`) is applied at every boundary: admission, parsing, and child discovery.
 
 ---
 
@@ -186,15 +194,19 @@ CLI shell  →  Coordinator  →  Frontier (bounded queue)
 
 ## Search While Indexing
 
-The current MVP supports interleaved indexing and search through manual step-wise
-processing: the user calls `step` to index pages and `search` to query at any point
-between steps.
+The web interface supports true concurrent search while indexing is active. When
+`POST /api/run` is processing pages, `GET /api/search`, `GET /api/status`, and
+`GET /api/jobs` are served on separate threads via Flask's `threaded=True` mode and
+return immediately using a dedicated read-only SQLite connection. Results reflect all
+pages committed to the database up to the moment the search query executes.
 
-A future threaded extension can support fully active search-while-indexing without
-changing the storage contract. Search already reads committed SQLite state only, and
-indexing writes through a controlled single-path persistence layer (`index_writer`).
-These two properties mean the two operations are already structurally compatible with
-concurrent execution — threading becomes an operational change, not an architectural one.
+The mechanism: `step()` holds the write lock only during the fast DB-commit phase; the
+lock is released for the entire network-I/O portion (the majority of each step's
+wall-clock time). The read connection uses SQLite WAL mode, which guarantees readers
+never wait for an active writer on a separate connection.
+
+The CLI remains synchronous — `run` and `step` block until complete, but the user can
+call `search` between any two steps to see incrementally indexed results.
 
 ---
 
@@ -202,12 +214,11 @@ concurrent execution — threading becomes an operational change, not an archite
 
 The following are explicitly out of scope for MVP:
 
-- Background worker threads or async crawling
+- Multi-worker parallel crawling (concurrent fetches; current threading is request-handling only, not parallel indexing)
 - Frontier persistence and recovery across sessions
 - Recrawl of already-fetched pages
 - `robots.txt` compliance or per-host rate limiting
 - TF-IDF, BM25, PageRank, or semantic ranking
-- Web UI or REST API
 - Distributed or multi-machine execution
 - Runtime LLM agents or AI-assisted crawling decisions
 - Authentication-gated or JavaScript-rendered pages

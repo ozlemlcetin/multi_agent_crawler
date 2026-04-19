@@ -1,0 +1,149 @@
+{% extends "_base.html" %}
+{% block title %}Jobs{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div><h1>Jobs</h1><p class="sub">All crawl jobs — click a job ID for details</p></div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <button class="btn btn-secondary btn-sm" onclick="loadJobs()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<!-- quick index card -->
+<div class="card">
+  <div class="card-hdr"><h2>New Crawl Job</h2></div>
+  <div class="form-row">
+    <div class="field" style="flex:3">
+      <label for="url">Origin URL</label>
+      <input id="url" type="url" placeholder="https://example.com" style="min-width:260px">
+    </div>
+    <div class="field">
+      <label for="depth">Max Depth</label>
+      <input id="depth" type="number" min="0" max="10" value="1" style="width:70px">
+    </div>
+    <button class="btn btn-primary" onclick="doIndex()" style="margin-top:auto">Create Job</button>
+  </div>
+  <div class="alert" id="idx-alert"></div>
+</div>
+
+<!-- filter tabs -->
+<div class="card" style="padding-bottom:.5rem">
+  <div class="card-hdr">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <h2>Filter</h2>
+      <div class="tabs" style="margin-bottom:0;border-bottom:none;gap:.3rem">
+        <button class="tab-btn active" id="f-all"       onclick="setFilter('')">All</button>
+        <button class="tab-btn"        id="f-running"   onclick="setFilter('running')">Running</button>
+        <button class="tab-btn"        id="f-pending"   onclick="setFilter('pending')">Pending</button>
+        <button class="tab-btn"        id="f-paused"    onclick="setFilter('paused')">Paused</button>
+        <button class="tab-btn"        id="f-done"      onclick="setFilter('done')">Done</button>
+        <button class="tab-btn"        id="f-failed"    onclick="setFilter('failed')">Failed</button>
+        <button class="tab-btn"        id="f-cancelled" onclick="setFilter('cancelled')">Cancelled</button>
+      </div>
+    </div>
+    <div>
+      <input id="search-box" type="search" placeholder="Search job ID or URL…"
+             oninput="renderTable()" style="width:220px">
+    </div>
+  </div>
+</div>
+
+<!-- jobs table -->
+<div class="card">
+  <div id="jobs-wrap"><p class="empty-state">Loading…</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allJobs = [];
+let activeFilter = '';
+
+function setFilter(f) {
+  activeFilter = f;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const id = 'f-' + (f || 'all');
+  const btn = document.getElementById(id);
+  if (btn) btn.classList.add('active');
+  renderTable();
+}
+
+function renderTable() {
+  const q = (document.getElementById('search-box').value || '').toLowerCase();
+  let rows = allJobs;
+  if (activeFilter) rows = rows.filter(j => j.status === activeFilter);
+  if (q) rows = rows.filter(j => j.job_id.includes(q) || j.origin_url.toLowerCase().includes(q));
+
+  const w = document.getElementById('jobs-wrap');
+  if (!rows.length) { w.innerHTML = '<p class="empty-state">No jobs match.</p>'; return; }
+
+  w.innerHTML = `<div class="tbl-wrap"><table>
+    <thead><tr>
+      <th>Job ID</th><th>Origin URL</th><th>Depth</th><th>Status</th>
+      <th>Created</th><th>Started</th><th>Finished</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(j => `<tr>
+        <td>${jobLink(j.job_id)}</td>
+        <td class="url-cell" title="${j.origin_url}"><a href="${j.origin_url}" target="_blank">${j.origin_url}</a></td>
+        <td>${j.max_depth}</td>
+        <td>${tag(j.status)}</td>
+        <td class="text-muted" style="font-size:.8rem;white-space:nowrap">${fmtRelative(j.created_at)}</td>
+        <td class="text-muted" style="font-size:.8rem;white-space:nowrap">${j.started_at ? fmtRelative(j.started_at) : '—'}</td>
+        <td class="text-muted" style="font-size:.8rem;white-space:nowrap">${j.finished_at ? fmtRelative(j.finished_at) : '—'}</td>
+        <td style="white-space:nowrap">
+          ${(j.status==='running'||j.status==='pending') ? `<button class="btn btn-warn btn-xs" onclick="doPause('${j.job_id}')">Pause</button> ` : ''}
+          ${j.status==='paused' ? `<button class="btn btn-success btn-xs" onclick="doResume('${j.job_id}')">Resume</button> ` : ''}
+          ${['done','failed','cancelled'].includes(j.status) ? `<button class="btn btn-secondary btn-xs" onclick="doRetry('${j.job_id}')">Retry</button> ` : ''}
+          ${['pending','running','paused'].includes(j.status) ? `<button class="btn btn-danger btn-xs" onclick="doCancel('${j.job_id}')">Cancel</button>` : ''}
+        </td>
+      </tr>`).join('')}
+    </tbody></table></div>
+  <p style="font-size:.78rem;color:#aaa;margin-top:.5rem;padding:.2rem .4rem">
+    Showing ${rows.length} of ${allJobs.length} jobs
+  </p>`;
+}
+
+async function loadJobs() {
+  allJobs = await api('/api/jobs') || [];
+  if (!Array.isArray(allJobs)) allJobs = [];
+  renderTable();
+  setLastUpdated('lu');
+}
+
+async function doIndex() {
+  const url   = document.getElementById('url').value.trim();
+  const depth = parseInt(document.getElementById('depth').value, 10);
+  const res = await api('/api/index', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url, depth}),
+  });
+  if (res.error) showAlert('idx-alert', 'Error: ' + res.error, 'err');
+  else { showAlert('idx-alert', `Job ${res.job_id} created.`, 'ok'); loadJobs(); }
+}
+
+async function doPause(id) {
+  const r = await api(`/api/jobs/${id}/pause`, {method:'POST'});
+  if (r.error) alert(r.error); else loadJobs();
+}
+async function doResume(id) {
+  const r = await api(`/api/jobs/${id}/resume`, {method:'POST'});
+  if (r.error) alert(r.error); else loadJobs();
+}
+async function doCancel(id) {
+  if (!confirm(`Cancel job ${id}?`)) return;
+  const r = await api(`/api/jobs/${id}/cancel`, {method:'POST'});
+  if (r.error) alert(r.error); else loadJobs();
+}
+async function doRetry(id) {
+  const r = await api(`/api/jobs/${id}/retry`, {method:'POST'});
+  if (r.error) alert(r.error);
+  else { alert(`New job created: ${r.job_id}`); loadJobs(); }
+}
+
+loadJobs();
+</script>
+{% endblock %}

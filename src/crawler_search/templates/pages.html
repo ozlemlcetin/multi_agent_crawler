@@ -1,0 +1,107 @@
+{% extends "_base.html" %}
+{% block title %}Pages{% endblock %}
+
+{% block content %}
+<div class="page-hdr">
+  <div class="page-hdr-row">
+    <div><h1>Discovered Pages</h1><p class="sub">All URLs discovered and indexed across jobs</p></div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span class="last-updated" id="lu"></span>
+      <button class="btn btn-secondary btn-sm" onclick="loadPages()">↺ Refresh</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hdr"><h2>Filters</h2></div>
+  <div class="filter-row">
+    <div class="field">
+      <label>Job ID</label>
+      <input id="f-job" type="search" placeholder="job ID…" style="width:140px" oninput="loadPages()">
+    </div>
+    <div class="field">
+      <label>Fetch state</label>
+      <select id="f-state" onchange="loadPages()">
+        <option value="">All states</option>
+        <option>fetched</option><option>queued</option>
+        <option>unfetched</option><option>failed</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Depth</label>
+      <input id="f-depth" type="number" min="0" max="20" placeholder="any"
+             style="width:70px" oninput="loadPages()">
+    </div>
+    <div class="field">
+      <label>Limit</label>
+      <select id="f-limit" onchange="loadPages()">
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Search URL</label>
+      <input id="f-url" type="search" placeholder="filter URL text…" oninput="renderPages()" style="width:200px">
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-hdr">
+    <h2>Pages <span id="page-count" class="text-muted" style="font-size:.8rem;font-weight:400"></span></h2>
+  </div>
+  <div id="pages-wrap" class="tbl-wrap"><p class="empty-state">Loading…</p></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let pagesData = [];
+
+function renderPages() {
+  const q = (document.getElementById('f-url').value || '').toLowerCase();
+  let data = pagesData;
+  if (q) data = data.filter(r => r.canonical_url.toLowerCase().includes(q));
+  document.getElementById('page-count').textContent = `(${data.length})`;
+
+  const w = document.getElementById('pages-wrap');
+  if (!data.length) { w.innerHTML = '<p class="empty-state">No pages found.</p>'; return; }
+
+  w.innerHTML = `<table>
+    <thead><tr>
+      <th>URL</th><th>Title</th><th>State</th><th>HTTP</th>
+      <th>Depth</th><th>Job</th><th>Discovered</th><th>Fetched</th>
+    </tr></thead>
+    <tbody>
+      ${data.map(r => `<tr>
+        <td class="url-cell" title="${r.canonical_url}"><a href="${r.canonical_url}" target="_blank">${r.canonical_url}</a></td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.title||''}">${r.title||'—'}</td>
+        <td>${tag(r.fetch_state)}</td>
+        <td>${r.http_status||'—'}</td>
+        <td>${r.depth}</td>
+        <td>${jobLink(r.job_id)}</td>
+        <td class="text-muted" style="font-size:.78rem;white-space:nowrap">${fmtRelative(r.discovered_at)}</td>
+        <td class="text-muted" style="font-size:.78rem;white-space:nowrap">${r.fetched_at ? fmtRelative(r.fetched_at) : '—'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadPages() {
+  const job   = document.getElementById('f-job').value.trim();
+  const state = document.getElementById('f-state').value;
+  const depth = document.getElementById('f-depth').value;
+  const limit = document.getElementById('f-limit').value;
+  let url = `/api/pages?limit=${limit}`;
+  if (job)   url += `&job_id=${encodeURIComponent(job)}`;
+  if (state) url += `&fetch_state=${encodeURIComponent(state)}`;
+  if (depth) url += `&depth=${encodeURIComponent(depth)}`;
+  const data = await api(url);
+  pagesData = Array.isArray(data) ? data : [];
+  renderPages();
+  setLastUpdated('lu');
+}
+
+loadPages();
+</script>
+{% endblock %}

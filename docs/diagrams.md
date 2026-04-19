@@ -9,33 +9,40 @@ The multi-agent system described in Diagram 3 operated during **development only
 ## 1. Runtime Architecture
 
 The main runtime modules and data flow of the local Python application.
+Two interfaces share the same Coordinator: a synchronous CLI and an optional Flask web UI.
+The Coordinator holds two SQLite connections — a write connection (index/step) and a
+read connection (search/status/jobs) — so reads are never blocked by an active crawl.
 
 ```mermaid
 flowchart TD
-    User(["User (terminal)"])
+    UserCLI(["User (terminal)"])
+    UserWeb(["User (browser)"])
     CLI["cli.py\nInteractive Shell"]
+    Web["web.py\nFlask Web UI\n(threaded=True)"]
     Coord["coordinator.py\nCoordinator"]
     Frontier["frontier.py\nBounded Queue"]
     Fetcher["fetcher.py\nHTTP Fetch"]
     Parser["parser.py\nHTML Parse"]
     Writer["index_writer.py\nPersistence"]
-    DB[("crawler.db\nSQLite WAL")]
+    DBwrite[("crawler.db\nwrite connection\n+ lock")]
+    DBread[("crawler.db\nread connection\nWAL snapshot")]
     Search["search_service.py\nSearch"]
     Status["status()\nCounts & Frontier Snapshot"]
 
-    User -->|"index / step / search\n jobs / status / quit"| CLI
+    UserCLI -->|"index / step / run\n search / jobs / status"| CLI
+    UserWeb -->|"POST /api/run\nGET /api/search\nGET /api/status …"| Web
     CLI --> Coord
+    Web --> Coord
     Coord --> Frontier
     Frontier -->|"FrontierItem"| Fetcher
     Fetcher -->|"FetchResult"| Parser
     Parser -->|"ParsedResult"| Writer
-    Writer -->|"pages / links\nterms / postings\ndiscoveries"| DB
+    Writer -->|"pages / links\nterms / postings\ndiscoveries"| DBwrite
     Coord -->|"search query"| Search
-    Search -->|"reads committed state"| DB
-    Search -->|"(relevant_url, origin_url, depth)"| CLI
+    Search -->|"reads committed state"| DBread
+    Search -->|"(relevant_url, origin_url, depth)"| Coord
     Coord --> Status
-    Status -->|"reads counts"| DB
-    Status --> CLI
+    Status -->|"reads counts"| DBread
 ```
 
 ---
