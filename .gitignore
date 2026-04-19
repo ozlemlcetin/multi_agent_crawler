@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local database / runtime artifacts
+crawler.db
+*.db
+
+# Tooling / editor
+.vscode/
+.idea/
+.claude/
+
+# OS files
+.DS_Store
