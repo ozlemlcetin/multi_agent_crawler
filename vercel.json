@@ -1,5 +1,4 @@
 {
-  "comment": "Vercel deployment for the multi_agent_crawler web UI. See DEPLOYMENT.md for limitations.",
   "builds": [
     { "src": "api/index.py", "use": "@vercel/python" }
   ],
