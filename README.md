@@ -45,9 +45,13 @@ Web UI    (web.py)  ──┴── Coordinator (coordinator.py)
 ```
 
 Core modules are stdlib-only. The optional web UI requires `flask` (`pip install -e ".[web]"`).
-The CLI processes pages synchronously (`step` and `run` block until complete).
-The web server runs with `threaded=True` so search, status, and jobs requests are served
-concurrently while `/api/run` is indexing in its own thread.
+
+**Concurrent search during indexing:** The CLI `step` and `run` commands are synchronous and
+block until complete. The web server runs with `threaded=True`, so `GET /api/search`,
+`GET /api/status`, and `GET /api/jobs` are served on separate threads and return immediately
+even while `POST /api/run` is actively crawling. This works because the Coordinator holds
+the write lock only during the fast DB-commit phase (not during network I/O), and the
+dedicated read connection uses SQLite WAL mode — readers never wait for an active writer.
 
 ---
 

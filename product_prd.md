@@ -107,7 +107,7 @@ with a REST API (`POST /api/index`, `POST /api/step`, `POST /api/run`,
 ### State Visibility
 
 - `status` reports frontier size, frontier capacity, backpressure flag, and row counts
-  for all six database tables.
+  for all seven database tables.
 - `jobs` shows all submitted jobs with id, status, max depth, creation time, and origin URL.
 - `step` reports the outcome of each processed page (URL, HTTP outcome, title, link count,
   children admitted).
@@ -313,9 +313,7 @@ The following are candidates for post-MVP patches, in rough priority order:
 
 1. **Background worker threads** — run `step` in a thread pool; the write path is already
    structured for this.
-2. **Frontier recovery** — reload `queued` pages from the DB into the in-memory frontier on
-   startup, enabling session continuity.
-3. **Recrawl support** — allow re-fetching pages past a configurable staleness threshold.
+2. **Recrawl support** — allow re-fetching pages past a configurable staleness threshold.
 4. **Crawl politeness** — `robots.txt` parsing and per-host request pacing.
 5. **Improved ranking** — TF-IDF normalization or BM25 over the existing postings table.
 6. **Configurable storage path** — pass `--db` flag to `crawler-search run`.
